@@ -1,0 +1,63 @@
+# Caddy reverse proxy configuration for MCP Kibana Server
+# Handles authentication and SSL termination
+
+{
+    # Global options
+    auto_https off
+    admin off
+}
+
+# HTTP endpoint (for local development)
+:80 {
+    # Health check endpoint (no auth required)
+    handle /health {
+        respond "OK" 200
+    }
+
+    # All other endpoints require authentication
+    handle {
+        # API Key authentication via X-API-Key header
+        @unauthorized {
+            not header X-API-Key {$MCP_API_KEY}
+        }
+        
+        # Return 401 for unauthorized requests
+        handle @unauthorized {
+            respond "Unauthorized: Valid X-API-Key header required" 401 {
+                close
+            }
+        }
+
+        # Forward authenticated requests to MCP server
+        reverse_proxy mcp-server:8080 {
+            # Preserve headers
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            
+            # Enable WebSocket support for SSE
+            header_up Connection {>Connection}
+            header_up Upgrade {>Upgrade}
+        }
+    }
+}
+
+# HTTPS endpoint (for production)
+# Uncomment and configure for production use:
+# 
+# your-domain.com {
+#     # TLS configuration
+#     tls {$TLS_EMAIL}
+#     
+#     # API Key authentication
+#     @unauthorized {
+#         not header X-API-Key {$MCP_API_KEY}
+#     }
+#     
+#     handle @unauthorized {
+#         respond "Unauthorized" 401
+#     }
+#     
+#     reverse_proxy mcp-server:8080
+# }

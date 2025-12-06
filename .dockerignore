@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.example
+verify_implementation.py
+inspect_mcp.py
+README.md
+task.md
+implementation_plan.md
+walkthrough.md
