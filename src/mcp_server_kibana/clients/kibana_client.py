@@ -124,5 +124,3 @@ class KibanaClient:
         data = await self._request("PUT", f"/api/spaces/space/{id}", json=request.model_dump(exclude_none=True))
         return SpaceResponse(**data)
 
-    async def delete_space(self, id: str) -> None:
-        await self._request("DELETE", f"/api/spaces/space/{id}")

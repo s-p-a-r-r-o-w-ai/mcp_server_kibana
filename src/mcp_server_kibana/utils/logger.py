@@ -1,6 +1,5 @@
 import logging
 import sys
-from typing import Optional
 
 class ColoredFormatter(logging.Formatter):
     """Custom formatter with colors for different log levels"""

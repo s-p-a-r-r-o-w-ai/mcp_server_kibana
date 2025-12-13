@@ -5,8 +5,8 @@ MCP server providing tools for Kibana REST API endpoints using FastMCP and Pydan
 ## Features
 
 ### 🔐 Authentication
-- **Reverse Proxy Authentication**: Production-ready authentication via Caddy reverse proxy
-- **API Key Support**: Secure access using `X-API-Key` header
+- **Bearer Token Authentication**: Built-in FastMCP token verification
+- **API Key Support**: Secure access using `Authorization: Bearer <token>` header
 - **Kibana Integration**: Supports `KIBANA_API_KEY` for Kibana authentication
 
 ### 🌐 Spaces Support
@@ -24,6 +24,12 @@ All tools support an optional `space` argument to target specific Kibana Spaces 
 - `get_saved_object(type, id, space)` - Get saved object
 - `update_saved_object(type, id, attributes, references, space)` - Update saved object
 
+### 🏢 Spaces Management
+- `get_all_spaces()` - Get all Kibana spaces
+- `get_space(id)` - Get specific space
+- `create_space(id, name, ...)` - Create new space
+- `update_space(id, name, ...)` - Update space
+
 ## Quick Start
 
 ### Using Docker Compose (Recommended)
@@ -37,7 +43,7 @@ cp .env.example .env
 ```bash
 KIBANA_URL=https://your-kibana-instance.com
 KIBANA_API_KEY=your-kibana-api-key
-MCP_API_KEY=your-secret-mcp-key  # Used for client authentication
+# MCP_API_KEY=optional-bearer-token  # If not set, auto-generated on startup
 ```
 
 3. **Start the services**:
@@ -46,42 +52,34 @@ docker compose up -d
 ```
 
 The setup includes:
-- **MCP Kibana Server**: Internal service running in SSE mode
-- **Caddy Reverse Proxy**: Handles authentication and SSL termination
+- **MCP Kibana Server**: Direct service with built-in token verification
 
 4. **Verify the setup**:
 ```bash
+# Check server logs for auto-generated token
+docker compose logs mcp-server
+
 # Test 1: Without auth (should return 401)
-curl http://localhost:8080/sse
+curl http://localhost:8080/mcp
 # Expected: HTTP/1.1 401 Unauthorized
 
-# Test 2: With correct API key (should return 200)
-curl -H "X-API-Key: your-secret-mcp-key" http://localhost:8080/sse
+# Test 2: With bearer token from logs (should return 200)
+curl -H "Authorization: Bearer <token-from-logs>" http://localhost:8080/mcp
 # Expected: HTTP/1.1 200 OK
-
-# Test 3: Health check (no auth required)
-curl http://localhost:8080/health
-# Expected: OK
 ```
 
 5. **View logs**:
 ```bash
-# All services
-docker compose logs -f
-
-# Specific service
-docker compose logs -f caddy
+# View server logs
 docker compose logs -f mcp-server
 ```
 
 ### Architecture
 
 ```
-Client (with X-API-Key) 
+Client (with Bearer token) 
     ↓
-Caddy Reverse Proxy (validates API key)
-    ↓
-MCP Kibana Server (internal, SSE mode)
+MCP Kibana Server (/mcp endpoint)
     ↓
 Kibana API
 ```
@@ -114,7 +112,7 @@ npx @modelcontextprotocol/inspector
 ```
 
 Then connect to:
-- **With Docker**: `http://localhost:8080/sse` (requires `X-API-Key` header)
+- **With Docker**: `http://localhost:8080/mcp` (requires `Authorization: Bearer <token>` header)
 - **Local stdio**: Use the inspector's stdio connection mode
 
 ## Production Deployment
@@ -125,31 +123,37 @@ Then connect to:
 |----------|----------|-------------|
 | `KIBANA_URL` | Yes | Your Kibana instance URL |
 | `KIBANA_API_KEY` | Yes | API key for Kibana authentication |
-| `MCP_API_KEY` | Yes | Secret key for MCP client authentication |
+| `MCP_API_KEY` | No | Bearer token (auto-generated if not set) |
 | `LOG_LEVEL` | No | Logging level (default: INFO) |
+
+### Deployment Modes
+
+**1. Production (Docker Compose):**
+- HTTP server with /mcp endpoint
+- Auto-generated bearer tokens
+- Built-in authentication
+
+**2. Development (Local):**
+- Direct stdio mode (no auth)
+- HTTP mode with auto-generated tokens
+- MCP Inspector compatible
+
+**3. ASGI Production:**
+- Use with Uvicorn/Gunicorn
+- `uvicorn mcp_server_kibana.server:app`
+- Full ASGI middleware support
 
 ### Security Best Practices
 
-1. **Use Strong API Keys**: Generate cryptographically secure keys
-   ```bash
-   # Generate a secure key
-   openssl rand -base64 32
-   ```
+1. **Use Strong API Keys**: Tokens are auto-generated securely on startup
 
-2. **Enable HTTPS in Production**: Uncomment HTTPS section in `Caddyfile` and `docker-compose.yml`
+2. **Rotate Keys Regularly**: Update `MCP_API_KEY` periodically
 
-3. **Rotate Keys Regularly**: Update `MCP_API_KEY` periodically
-
-4. **Network Isolation**: Use Docker networks to isolate services
+3. **Use HTTPS in Production**: Deploy behind a reverse proxy with SSL
 
 ### HTTPS Configuration
 
-For production with automatic HTTPS:
-
-1. Update `Caddyfile` - uncomment the HTTPS section
-2. Update `docker-compose.yml` - uncomment port 443 and TLS_EMAIL
-3. Set `TLS_EMAIL` in `.env` for Let's Encrypt notifications
-4. Ensure your domain points to your server
+For production HTTPS, deploy behind a reverse proxy (nginx, Caddy, etc.) that handles SSL termination and forwards requests to the MCP server on port 8080.
 
 ## Client Configuration
 
@@ -161,9 +165,9 @@ Add to your Claude Desktop config:
 {
   "mcpServers": {
     "kibana": {
-      "url": "http://localhost:8080/sse",
+      "url": "http://localhost:8080/mcp",
       "headers": {
-        "X-API-Key": "your-secret-mcp-key"
+        "Authorization": "Bearer <token-from-server-logs>"
       }
     }
   }
@@ -173,8 +177,8 @@ Add to your Claude Desktop config:
 ### Cursor / Other MCP Clients
 
 Configure with:
-- **Endpoint**: `http://localhost:8080/sse`
-- **Header**: `X-API-Key: your-secret-mcp-key`
+- **Endpoint**: `http://localhost:8080/mcp`
+- **Header**: `Authorization: Bearer <token-from-server-logs>`
 
 ## Docker Management
 
@@ -209,30 +213,24 @@ docker compose down -v
 
 ```bash
 # Test 1: No authentication (should fail with 401)
-curl -v http://localhost:8080/sse
+curl -v http://localhost:8080/mcp
 # Expected: HTTP/1.1 401 Unauthorized
-# Response: "Unauthorized: Valid X-API-Key header required"
 
-# Test 2: Valid API key (should succeed with 200)
-curl -v -H "X-API-Key: your-secret-mcp-key" http://localhost:8080/sse
+# Test 2: Valid bearer token (should succeed with 200)
+curl -v -H "Authorization: Bearer <token-from-logs>" http://localhost:8080/mcp
 # Expected: HTTP/1.1 200 OK
-# Response: SSE stream with session endpoint
 
-# Test 3: Invalid API key (should fail with 401)
-curl -v -H "X-API-Key: wrong-key" http://localhost:8080/sse
+# Test 3: Invalid bearer token (should fail with 401)
+curl -v -H "Authorization: Bearer wrong-key" http://localhost:8080/mcp
 # Expected: HTTP/1.1 401 Unauthorized
-
-# Test 4: Health check (no auth required)
-curl http://localhost:8080/health
-# Expected: OK
 ```
 
 ### MCP Protocol Tests
 
 ```bash
 # Initialize session (requires auth)
-curl -X POST "http://localhost:8080/sse" \
-  -H "X-API-Key: your-secret-mcp-key" \
+curl -X POST "http://localhost:8080/mcp" \
+  -H "Authorization: Bearer <token-from-logs>" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}'
 ```
@@ -252,10 +250,10 @@ curl -X POST "http://localhost:8080/sse" \
 **Symptoms**: `HTTP/1.1 401 Unauthorized`
 
 **Solutions**:
-- Verify `X-API-Key` header is included in request
-- Check that header value matches `MCP_API_KEY` in `.env` file
-- View Caddy logs for auth failures: `docker compose logs caddy`
-- Ensure no extra spaces in API key value
+- Verify `Authorization: Bearer <token>` header is included in request
+- Check that token value matches `MCP_API_KEY` in `.env` file
+- View server logs for auth failures: `docker compose logs mcp-server`
+- Ensure no extra spaces in token value
 
 ### Kibana Connection Issues
 **Symptoms**: Errors when calling Kibana tools
@@ -281,8 +279,21 @@ curl -X POST "http://localhost:8080/sse" \
 
 **Solutions**:
 - Stop conflicting services: `docker ps` and `docker stop <container>`
-- Change port in `docker-compose.yml` (e.g., `8081:80`)
+- Change port in `docker-compose.yml` (e.g., `8081:8080`)
 - Kill process using port: `lsof -ti:8080 | xargs kill -9`
+
+## ASGI Production Deployment
+
+```bash
+# Install production server
+pip install uvicorn[standard]
+
+# Run with Uvicorn
+uvicorn mcp_server_kibana.server:app --host 0.0.0.0 --port 8080
+
+# Run with Gunicorn
+gunicorn mcp_server_kibana.server:app -k uvicorn.workers.UvicornWorker
+```
 
 ## Project Structure
 
@@ -291,14 +302,13 @@ mcp_server_kibana/
 ├── src/mcp_server_kibana/
 │   ├── clients/          # Kibana HTTP client
 │   ├── config/           # Configuration settings
-│   ├── prompts/          # Lens visualization prompts
 │   ├── tools/            # MCP tool implementations
 │   ├── utils/            # Utility modules
 │   ├── models.py         # Pydantic models
-│   └── server.py         # Main server entry point
+│   └── server.py         # Main server + ASGI app
 ├── Dockerfile            # Docker configuration
-├── docker-compose.yml    # Multi-container setup
-├── Caddyfile            # Reverse proxy config
+├── docker-compose.yml    # Container setup
+
 ├── .env.example         # Environment template
 └── README.md            # This file
 ```

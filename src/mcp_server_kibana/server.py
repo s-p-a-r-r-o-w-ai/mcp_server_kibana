@@ -3,15 +3,16 @@
 Kibana MCP Server
 
 MCP server providing tools for Kibana REST API endpoints using FastMCP and Pydantic.
-Supports stdio, SSE, and streamable-HTTP protocols.
+Supports stdio, HTTP, and ASGI app modes with token verification.
 """
 
 import sys
 import os
 import argparse
-import logging
+import secrets
+import string
 from pathlib import Path
-from .tools.kibana_tools import mcp
+from fastmcp.server.auth.providers.debug import DebugTokenVerifier
 from .utils.logger import setup_logger
 from .config.settings import settings
 
@@ -28,6 +29,12 @@ def load_env_file():
 
 load_env_file()
 
+def generate_token(length: int = 32) -> str:
+    """Generate a cryptographically secure API key."""
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+
 def create_parser():
     """Create command line argument parser"""
     parser = argparse.ArgumentParser(
@@ -38,16 +45,39 @@ def create_parser():
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
     # stdio command
-    stdio_parser = subparsers.add_parser("stdio", help="Start a stdio server")
+    subparsers.add_parser("stdio", help="Start a stdio server")
     
     # http command  
-    http_parser = subparsers.add_parser("http", help="Start a streamable-HTTP server with optional SSE support")
+    http_parser = subparsers.add_parser("http", help="Start HTTP server with /mcp endpoint")
     http_parser.add_argument("--port", type=int, default=8080, help="Port to listen on")
     
-    # sse command
-    sse_parser = subparsers.add_parser("sse", help="Start an SSE server")
-    sse_parser.add_argument("--port", type=int, default=8080, help="Port to listen on")
+    # asgi command
+    subparsers.add_parser("asgi", help="Create ASGI app (for production deployment)")
+    
     return parser
+
+
+def create_app():
+    """Create ASGI application for production deployment."""
+    # Auto-generate token if not provided
+    api_key = settings.mcp_api_key
+    if not api_key:
+        api_key = generate_token()
+        print(f"\n🔑 Generated Bearer Token: {api_key}")
+        print(f"Use this token in client requests: Authorization: Bearer {api_key}\n")
+    
+    # Setup authentication
+    def validate_token(token: str):
+        return token == api_key
+    
+    auth = DebugTokenVerifier(validate=validate_token)
+    
+    # Create MCP server with auth
+    from .tools.kibana_tools import get_mcp_with_auth
+    mcp = get_mcp_with_auth(auth)
+    
+    # Return ASGI app with /mcp endpoint
+    return mcp.http_app(path="/mcp")
 
 
 def main():
@@ -68,27 +98,56 @@ def main():
     
     logger.info(f"Starting Kibana MCP Server in {args.command} mode")
     
-    # Note: Authentication is handled by reverse proxy (Caddy/Nginx)
-    # See docker-compose.yml for configuration
-    
     try:
         if args.command == "stdio":
+            # No auth for stdio mode
+            from .tools.kibana_tools import get_mcp_with_auth
+            mcp = get_mcp_with_auth(None)
             logger.info("Starting stdio server")
             mcp.run()
+            
         elif args.command == "http":
-            logger.info(f"Starting HTTP server on port {args.port}")
-            mcp.run(transport="http", port=args.port, host="0.0.0.0")
-        elif args.command == "sse":
-            logger.info(f"Starting SSE server on port {args.port}")
-            mcp.run(transport="sse", port=args.port, host="0.0.0.0")
+            # Auto-generate token if not provided
+            api_key = settings.mcp_api_key
+            if not api_key:
+                api_key = generate_token()
+                print(f"\n🔑 Generated Bearer Token: {api_key}")
+                print(f"Use this token in client requests: Authorization: Bearer {api_key}")
+                print(f"MCP Endpoint: http://localhost:{args.port}/mcp\n")
+            else:
+                print(f"\n🔑 Using configured Bearer Token from MCP_API_KEY")
+                print(f"MCP Endpoint: http://localhost:{args.port}/mcp\n")
+            
+            # Setup authentication
+            def validate_token(token: str):
+                return token == api_key
+            
+            auth = DebugTokenVerifier(validate=validate_token)
+            
+            # Create and run server
+            from .tools.kibana_tools import get_mcp_with_auth
+            mcp = get_mcp_with_auth(auth)
+            
+            logger.info(f"Starting HTTP server on port {args.port} with /mcp endpoint")
+            mcp.run(transport="http", port=args.port, host="0.0.0.0", path="/mcp")
+            
+        elif args.command == "asgi":
+            print("ASGI app created. Use with: uvicorn mcp_server_kibana.server:app")
+            
         else:
             parser.print_help()
             sys.exit(1)
+            
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
     except Exception as e:
         logger.error(f"Server error: {str(e)}")
         sys.exit(1)
+
+
+# ASGI app for production deployment
+# Use: uvicorn mcp_server_kibana.server:create_app --factory
+app = create_app
 
 if __name__ == "__main__":
     main()

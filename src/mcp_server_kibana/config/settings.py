@@ -1,7 +1,6 @@
 """Configuration settings for Kibana MCP server."""
 
 import os
-from typing import Optional
 
 
 class Settings:

@@ -1,47 +1,13 @@
-version: '3.8'
-
 services:
-  # MCP Kibana Server (internal, not exposed directly)
   mcp-server:
     build: .
     image: mcp-kibana:latest
     container_name: mcp-kibana-server
-    command: ["sse", "--port", "8080"]
-    environment:
-      - KIBANA_URL=${KIBANA_URL:-http://localhost:5601}
-      - KIBANA_API_KEY=${KIBANA_API_KEY}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    networks:
-      - mcp-network
-    restart: unless-stopped
-    # Internal port only, not exposed to host
-    expose:
-      - "8080"
-
-  # Caddy reverse proxy with authentication
-  caddy:
-    image: caddy:2-alpine
-    container_name: mcp-caddy
     ports:
-      - "8080:80"      # HTTP (with auth)
-      # - "443:443"    # HTTPS (uncomment for production)
+      - "8080:8080"
     environment:
-      - MCP_API_KEY=${MCP_API_KEY:-change-this-secret-key}
-      # - TLS_EMAIL=${TLS_EMAIL}  # Uncomment for production HTTPS
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    networks:
-      - mcp-network
-    depends_on:
-      - mcp-server
+      KIBANA_URL: ${KIBANA_URL}
+      KIBANA_API_KEY: ${KIBANA_API_KEY}
+      MCP_API_KEY: ${MCP_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     restart: unless-stopped
-
-networks:
-  mcp-network:
-    driver: bridge
-
-volumes:
-  caddy_data:
-  caddy_config:
