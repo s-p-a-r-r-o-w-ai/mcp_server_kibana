@@ -38,4 +38,4 @@ EXPOSE 8080
 
 # Entrypoint
 ENTRYPOINT ["mcp-server-kibana"]
-CMD ["http", "--port", "8080"]
+CMD []

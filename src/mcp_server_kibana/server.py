@@ -3,7 +3,7 @@
 Kibana MCP Server
 
 MCP server providing tools for Kibana REST API endpoints using FastMCP and Pydantic.
-Supports stdio, HTTP, and ASGI app modes with token verification.
+Supports stdio, HTTP, and SSE modes with token verification.
 """
 
 import sys
@@ -42,42 +42,42 @@ def create_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
-    
-    # stdio command
-    subparsers.add_parser("stdio", help="Start a stdio server")
-    
-    # http command  
-    http_parser = subparsers.add_parser("http", help="Start HTTP server with /mcp endpoint")
-    http_parser.add_argument("--port", type=int, default=8080, help="Port to listen on")
-    
-    # asgi command
-    subparsers.add_parser("asgi", help="Create ASGI app (for production deployment)")
+    # Optional argument to override transport mode
+    parser.add_argument("transport", nargs="?", choices=["stdio", "http", "sse"], help="Transport mode (stdio, http, sse)")
+    parser.add_argument("--port", type=int, default=8080, help="Port to listen on (for http/sse)")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to listen on")
     
     return parser
 
 
 def create_app():
     """Create ASGI application for production deployment."""
-    # Auto-generate token if not provided
-    api_key = settings.mcp_api_key
-    if not api_key:
-        api_key = generate_token()
-        print(f"\n🔑 Generated Bearer Token: {api_key}")
-        print(f"Use this token in client requests: Authorization: Bearer {api_key}\n")
+    # Use the shared setup logic, defaulting to http/sse auth requirements
+    return get_configured_mcp(auth_required=True).http_app(path="/mcp")
+
+
+def get_configured_mcp(auth_required: bool):
+    """Factory to create the MCP server with appropriate auth."""
+    auth = None
     
-    # Setup authentication
-    def validate_token(token: str):
-        return token == api_key
-    
-    auth = DebugTokenVerifier(validate=validate_token)
-    
-    # Create MCP server with auth
+    if auth_required:
+        # Auto-generate token if not provided
+        api_key = settings.mcp_api_key
+        if not api_key:
+            api_key = generate_token()
+            print(f"\n🔑 Generated Bearer Token: {api_key}")
+            print(f"Use this token in client requests: Authorization: Bearer {api_key}\n")
+        else:
+            print(f"\n🔑 Using configured Bearer Token from MCP_API_KEY")
+
+        # Setup authentication
+        def validate_token(token: str):
+            return token == api_key
+        
+        auth = DebugTokenVerifier(validate=validate_token)
+
     from .tools.kibana_tools import get_mcp_with_auth
-    mcp = get_mcp_with_auth(auth)
-    
-    # Return ASGI app with /mcp endpoint
-    return mcp.http_app(path="/mcp")
+    return get_mcp_with_auth(auth)
 
 
 def main():
@@ -86,68 +86,39 @@ def main():
     logger = setup_logger("mcp-kibana", settings.log_level)
     
     parser = create_parser()
-    
-    # Handle no arguments - default to stdio mode
-    if len(sys.argv) == 1:
-        # Default to stdio mode for MCP inspector compatibility
-        class Args:
-            command = "stdio"
-        args = Args()
-    else:
-        args = parser.parse_args()
-    
-    logger.info(f"Starting Kibana MCP Server in {args.command} mode")
-    
-    try:
-        if args.command == "stdio":
-            # No auth for stdio mode
-            from .tools.kibana_tools import get_mcp_with_auth
-            mcp = get_mcp_with_auth(None)
-            logger.info("Starting stdio server")
-            mcp.run()
-            
-        elif args.command == "http":
-            # Auto-generate token if not provided
-            api_key = settings.mcp_api_key
-            if not api_key:
-                api_key = generate_token()
-                print(f"\n🔑 Generated Bearer Token: {api_key}")
-                print(f"Use this token in client requests: Authorization: Bearer {api_key}")
-                print(f"MCP Endpoint: http://localhost:{args.port}/mcp\n")
-            else:
-                print(f"\n🔑 Using configured Bearer Token from MCP_API_KEY")
-                print(f"MCP Endpoint: http://localhost:{args.port}/mcp\n")
-            
-            # Setup authentication
-            def validate_token(token: str):
-                return token == api_key
-            
-            auth = DebugTokenVerifier(validate=validate_token)
-            
-            # Create and run server
-            from .tools.kibana_tools import get_mcp_with_auth
-            mcp = get_mcp_with_auth(auth)
-            
-            logger.info(f"Starting HTTP server on port {args.port} with /mcp endpoint")
-            mcp.run(transport="http", port=args.port, host="0.0.0.0", path="/mcp")
-            
-        elif args.command == "asgi":
-            print("ASGI app created. Use with: uvicorn mcp_server_kibana.server:app")
-            
-        else:
-            parser.print_help()
-            sys.exit(1)
-            
-    except KeyboardInterrupt:
-        logger.info("Server stopped by user")
-    except Exception as e:
-        logger.error(f"Server error: {str(e)}")
-        sys.exit(1)
+    args = parser.parse_args()
 
+    # Determine transport mode: Arg > Env Var > Default (stdio)
+    transport = args.transport
+    if not transport:
+        transport = os.getenv("MCP_TRANSPORT", "").lower()
+    if not transport:
+        transport = "stdio"
 
-# ASGI app for production deployment
-# Use: uvicorn mcp_server_kibana.server:create_app --factory
-app = create_app
+    # Validate transport
+    if transport not in ["stdio", "http", "sse"]:
+        logger.warning(f"Unknown transport '{transport}', defaulting to stdio")
+        transport = "stdio"
+
+    logger.info(f"Starting Kibana MCP Server in {transport} mode")
+
+    if transport == "stdio":
+        # No auth for stdio
+        mcp = get_configured_mcp(auth_required=False)
+        mcp.run(transport="stdio")
+        
+    elif transport in ["http", "sse"]:
+        # Auth required for network transports
+        mcp = get_configured_mcp(auth_required=True)
+        
+        port = args.port
+        host = args.host
+        
+        logger.info(f"Starting {transport.upper()} server on http://{host}:{port}/mcp")
+        # For 'http' transport, FastMCP serves SSE at the endpoint by default if I recall correctly, 
+        # or we might need to specify transport="sse" explicitly if available.
+        # Passing strict transport string to mcp.run
+        mcp.run(transport=transport, port=port, host=host, path="/mcp")
 
 if __name__ == "__main__":
     main()

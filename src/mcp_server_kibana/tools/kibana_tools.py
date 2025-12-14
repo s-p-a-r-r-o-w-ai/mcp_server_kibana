@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from fastmcp import FastMCP
 from ..clients.kibana_client import KibanaClient
 from ..models import DataViewRequest, SavedObjectRequest, FindRequest
+from ..prompts import KIBANA_PROMPTS
 
 logger = logging.getLogger(__name__)
 
@@ -261,3 +262,33 @@ def _register_tools(mcp: FastMCP):
         )
         result = await client.update_space(id, request)
         return result.model_dump()
+
+    @mcp.tool()
+    async def get_visualization_instructions(visualization_key: Optional[str] = None) -> Dict[str, Any]:
+        """Get the specific instructions (prompt/schema) for creating a Kibana visualization.
+        
+        Use this tool when you need to know the exact JSON structure for a specific Chart type (e.g. Lens Bar Chart, Map, Vega).
+        
+        Args:
+            visualization_key: The key for the prompt (e.g., 'lens_xy', 'map_general'). 
+                             If omitted, returns a list of ALL available keys to help you choose.
+        """
+        available_keys = list(KIBANA_PROMPTS.keys())
+        
+        if not visualization_key:
+            return {
+                "message": "Please specify a 'visualization_key' to get the detailed prompt.",
+                "available_keys": available_keys,
+                "tip": "Call this tool again with one of these keys."
+            }
+        
+        if visualization_key not in KIBANA_PROMPTS:
+            return {
+                "error": f"Key '{visualization_key}' not found.",
+                "available_keys": available_keys
+            }
+            
+        return {
+            "key": visualization_key,
+            "instructions": KIBANA_PROMPTS[visualization_key]
+        }

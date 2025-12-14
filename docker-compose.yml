@@ -1,5 +1,5 @@
 services:
-  mcp-server:
+  mcp-kibana-server:
     build: .
     image: mcp-kibana:latest
     container_name: mcp-kibana-server
@@ -9,5 +9,13 @@ services:
       KIBANA_URL: ${KIBANA_URL}
       KIBANA_API_KEY: ${KIBANA_API_KEY}
       MCP_API_KEY: ${MCP_API_KEY:-}
+      MCP_TRANSPORT: ${MCP_TRANSPORT:-http}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     restart: unless-stopped
+    networks:
+      - mcp-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+networks:
+  mcp-network:
+    driver: bridge
